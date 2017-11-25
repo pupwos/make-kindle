@@ -2,8 +2,7 @@
 # Partially, loosely, based on https://github.com/hrroon/literoticapi/.
 # That's GPL, so this is too.
 
-# Requirements:
-# pip install beautifulsoup4 cachecontrol[filecache] requests_futures jinja2
+# pip install -r requirements.txt
 
 from __future__ import print_function, unicode_literals
 
