@@ -6,11 +6,12 @@
 
 from __future__ import print_function, unicode_literals
 
-from functools import partial
-import HTMLParser
+import io
 import os
 import re
 import subprocess
+from collections import namedtuple
+from functools import partial
 
 from bs4 import BeautifulSoup
 from cachecontrol import CacheControl
@@ -19,6 +20,9 @@ from cachecontrol.heuristics import ExpiresAfter
 import jinja2
 import requests
 from requests_futures.sessions import FuturesSession
+from six import text_type
+from six.moves import html_parser, map, range
+from six.moves.urllib import parse
 
 
 soupify = partial(BeautifulSoup, features='html5lib')
@@ -28,26 +32,31 @@ cached = CacheControl(requests.Session(), heuristic=ExpiresAfter(hours=1),
 futures = FuturesSession(session=cached, max_workers=5)
 
 
-class Story(object):
+def soupify_request(req):
+    r = req.result()
+    if not r.ok:
+        raise IOError("Error: {}".format(r.status_code))
+    return soupify(r.content)
+
+# Chapter should have properties: id, title, toc_extra, text
+# Story should have id, author, title, publisher, chapters
+
+################################################################################
+### literotica
+
+class LitStory(object):
     def __init__(self, id):
         if 'literotica.com/' in id:
             pat = r'https?:\/\/(?:www\.)?literotica.com/s/([^\?]*)\??.*'
             id = re.match(pat, id).group(1)
 
-        self.id = unicode(id)
-        self.url = "https://www.literotica.com/s/%s" %(id)
+        self.id = text_type(id)
+        self.url = "https://www.literotica.com/s/{}".format(self.id)
         self._meta_dict = None
 
     def get_pages(self, nums):
         reqs = [futures.get('{}?page={}'.format(self.url, n)) for n in nums]
-
-        responses = []
-        for req in reqs:
-            r = req.result()
-            if not r.ok:
-                raise IOError("Error: {}".format(r.status_code))
-            responses.append(soupify(r.content))
-        return responses
+        return [soupify_request(req) for req in reqs]
 
     def get_page(self, num):
         return self.get_pages([num])[0]
@@ -74,13 +83,13 @@ class Story(object):
         d['author_link'] = author_link['href']
 
         t = p.find('title').get_text()
-        t = HTMLParser.HTMLParser().unescape(t)
+        t = html_parser.HTMLParser().unescape(t)
         # rip out " - Literotica.com"
         d['title'], d['category'] = t[:-17].rsplit(' - ', 1)
 
         d['description'] = p.find(
             'meta', {'name': 'description'})['content']
-        
+
         s = p.find('span', class_='b-pager-caption-t').text
         d['num_pages'] = int(re.match('(\d+) Pages?:?$', s).group(1))
 
@@ -91,16 +100,22 @@ class Story(object):
         a = author_page.find('a', href=lambda s: self.id in s)
         d['rating'] = re.match('.*\(([\d\.]+)\)', a.next_sibling).group(1)
         tr = a.find_parent('tr')
-        d['date'] = tr.find(class_='dt').text
+
+        dt = tr.find(class_='dt')  # in series
+        if dt is None:
+            dt = tr.find_all('td')[-1]
+        d['date'] = dt.text
+
         if 'sl' in tr['class']:
             d['series_name'] = tr.find_previous_sibling(class_='ser-ttl').text
         else:
             d['series_name'] = None
         return d
 
+    @property
     def text(self):
         if not getattr(self, '_text', None):
-            pages = self.get_pages(xrange(1, self.num_pages + 1))
+            pages = self.get_pages(range(1, self.num_pages + 1))
 
             bits = []
             for p in pages:
@@ -109,21 +124,134 @@ class Story(object):
                 sub, = div.contents
                 assert sub.name == 'div'
                 bits.extend(sub.contents)
-            self._text = '\n'.join(unicode(b) for b in bits)
+            self._text = '\n'.join(text_type(b) for b in bits)
 
         return self._text
+
+    @property
+    def toc_extra(self):
+        return "({}; {})".format(self.date, self.rating)
 
     def __repr__(self):
         return u'Story({!r})'.format(self.id)
 
 
-def get_series(story_id):
-    s = Story(story_id)
-    div = s.get_page(s.num_pages).find(id='b-series')
-    stories = [s]
-    if div:
-        stories += [Story(a['href']) for a in div.findAll('a')]
-    return stories
+class LitSeries(object):
+    publisher = 'Literotica.com'
+
+    def __init__(self, first_story_id):
+        self.first = s = LitStory(first_story_id)
+        div = s.get_page(s.num_pages).find(id='b-series')
+        self.chapters = [s]
+        if div:
+            self.chapters += [LitStory(a['href']) for a in div.findAll('a')]
+
+    @property
+    def title(self):
+        if self.first.series_name:
+            return self.first.series_name[:self.first.series_name.rfind(':')]
+        else:
+            return self.first.title
+
+    @property
+    def author(self):
+        return self.first.author
+
+    @property
+    def id(self):
+        return self.first.id
+
+
+################################################################################
+### tgstorytime
+# NOTE: tgstorytime has epubs:
+# http://www.tgstorytime.com/modules/epubversion/epubs/4189/all/Recovery.epub
+# But might as well do it this way for consistency.
+
+# their https cert is broken :|
+tgs_url_fmt = ("http://www.tgstorytime.com/viewstory.php?sid={}&chapter={}"
+               "&ageconsent=ok")
+
+# TODO: story / chapter notes, metadata, ...
+
+class TGSChapter(object):
+    def __init__(self, req, id, title):
+        self.req = req
+        self.id = id
+        self.title = title
+
+    @property
+    def soup(self):
+        if not hasattr(self, '_soup'):
+            self._soup = soupify_request(self.req)
+        return self._soup
+
+    @property
+    def toc_extra(self):
+        return ''
+
+    @property
+    def text(self):
+        div = self.soup.find('div', id='story')
+        sub, = div.contents
+        assert sub.name == 'span'
+        return '\n'.join(map(str, sub.contents))
+
+    def __repr__(self):
+        return u'TGSChapter<{}, chapter={}>'.format(self.title, self.id)
+
+
+class TGSStory(object):
+    publisher = 'tgstorytime.com'
+
+    def __init__(self, id):
+        if 'tgstorytime.com/' in id:
+            r = parse.urlparse(id)
+            assert r.netloc in {'www.tgstorytime.com', 'tgstorytime.com'}
+            assert r.path == '/viewstory.php'
+            qs = parse.parse_qs(r.query)
+            id, = map(int, qs['sid'])
+
+        self.id = id
+
+        p = soupify_request(self.req_chapter(1))
+
+        self.title, self.author = [
+            a.text for a in
+            p.find('div', id='pagetitle').find_all('a', recursive=False)]
+
+        ct = {}
+        for o in p.find('div', class_='jumpmenu').find_all('option'):
+            n = int(o.attrs['value'])
+            pre = '{}. '.format(n)
+            assert o.text.startswith(pre)
+            ct[n] = o.text[len(pre):]
+        chaps = range(1, len(ct) + 1)
+        assert set(ct) == set(chaps)
+
+        self.chapters = [TGSChapter(req, n, ct[n])
+                         for n, req in zip(chaps, self.req_chapters(chaps))]
+
+    def req_chapters(self, chapters):
+        return [futures.get(tgs_url_fmt.format(self.id, c)) for c in chapters]
+
+    def req_chapter(self, chapter):
+        return next(iter(self.req_chapters([chapter])))
+
+    def __repr__(self):
+        return u'TGSStory({})'.format(self.id)
+
+
+################################################################################
+### kindle generation and main logic
+
+def get_story(url):
+    if 'literotica.com' in url:
+        return LitSeries(url)
+    elif 'tgstorytime.com' in url:
+        return TGSStory(url)
+    else:
+        raise ValueError("can't parse url {}".format(url))
 
 
 book_format = r'''
@@ -131,24 +259,24 @@ book_format = r'''
 <html lang="en">
 <head>
     <meta charset="utf-8" />
-    <title>{{ title }}</title>
+    <title>{{ story.title }}</title>
 </head>
 <body>
 
 <div id="toc">
     <h2>Table of Contents</h2>
     <ul>
-    {% for story in stories %}
-        <li><a href="#{{ story.id }}">{{ story.title }}</a> ({{ story.date }}; {{ story.rating }})</li>
+    {% for chap in story.chapters %}
+        <li><a href="#{{ chap.id }}">{{ chap.title }}</a> {{ chap.toc_extra }}</li>
     {% endfor %}
     </ul>
 </div>
 <div class="pagebreak"></div>
 
-{% for story in stories %}
-    <h1 id="{{ story.id }}">{{ story.title }}</h1>
+{% for chap in story.chapters %}
+    <h1 id="{{ chap.id }}">{{ chap.title }}</h1>
 
-    {{ story.text() }}
+    {{ chap.text }}
 
     {% if not loop.last %}
         <div class="pagebreak"></div>
@@ -163,20 +291,19 @@ opf_format = r'''
 <package unique-identifier="uid" xmlns:opf="http://www.idpf.org/2007/opf" xmlns:asd="http://www.idpf.org/asdfaf">
     <metadata>
         <dc-metadata  xmlns:dc="http://purl.org/metadata/dublin_core" xmlns:oebpackage="http://openebook.org/namespaces/oeb-package/1.0/">
-            <dc:Title>{{ title }}</dc:Title>
+            <dc:Title>{{ story.title }}</dc:Title>
             <dc:Language>en</dc:Language>
-            <dc:Creator>{{ author }}</dc:Creator>
+            <dc:Creator>{{ story.author }}</dc:Creator>
             <dc:Copyrights>Copyright by the author</dc:Copyrights>
-            <dc:Publisher>Published on Literotica.com</dc:Publisher>
+            <dc:Publisher>Published on {{ story.publisher }}</dc:Publisher>
         </dc-metadata>
     </metadata>
     <manifest>
-        <item id="content" media-type="text/x-oeb1-document" href="content.html"></item>
-        <item id="ncx" media-type="application/x-dtbncx+xml" href="toc.ncx"/>
+        <item id="toc" media-type="application/x-dtbncx+xml" href="toc.ncx"/>
         <item id="text" media-type="text/x-oeb1-document" href="content.html"></item>
     </manifest>
     <spine toc="ncx">
-        <itemref idref="content"/>
+        <itemref idref="toc"/>
         <itemref idref="text"/>
     </spine>
     <guide>
@@ -188,13 +315,13 @@ opf_format = r'''
 
 toc_format = r'''
 <?xml version="1.0"?>
-<!DOCTYPE ncx PUBLIC "-//NISO//DTD ncx 2005-1//EN" 
+<!DOCTYPE ncx PUBLIC "-//NISO//DTD ncx 2005-1//EN"
  "http://www.daisy.org/z3986/2005/ncx-2005-1.dtd">
  <ncx xmlns="http://www.daisy.org/z3986/2005/ncx/" version="2005-1">
      <head>
      </head>
      <docTitle>
-         <text>{{ title }}</text>
+         <text>{{ story.title }}</text>
      </docTitle>
      <navMap>
         <navPoint id="toc" playOrder="1">
@@ -205,12 +332,12 @@ toc_format = r'''
             </navLabel>
             <content src="content.html#toc" />
         </navPoint>
-        {% for story in stories %}
-        <navPoint id="{{ story.id }}" playOrder="{{ loop.index + 1 }}">
+        {% for chapter in story.chapters %}
+        <navPoint id="{{ chapter.id }}" playOrder="{{ loop.index + 1 }}">
             <navLabel>
-                <text>{{ story.title }}</text>
+                <text>{{ chapter.title }}</text>
             </navLabel>
-            <content src="content.html#{{ story.id }}" />
+            <content src="content.html#{{ chapter.id }}" />
         </navPoint>
         {% endfor %}
     </navMap>
@@ -219,25 +346,19 @@ toc_format = r'''
 
 
 def make_mobi(url, out_name=None):
-    stories = get_series(url)
-    first = stories[0]
-
-    if first.series_name:
-        title = first.series_name[:first.series_name.rfind(':')]
+    story = get_story(url)
 
     if out_name is None:
-        out_name = first.id
+        out_name = text_type(story.id)
     os.makedirs(out_name)
 
-    d = dict(out_name=out_name, title=title, stories=stories,
-             author=first.author)
-
+    d = {'out_name': out_name, 'story': story}
     for name, template in [('toc.ncx', toc_format),
                            ('{}.opf'.format(out_name), opf_format),
                            ('content.html', book_format)]:
-        with open(os.path.join(out_name, name), 'w') as f:
+        with io.open(os.path.join(out_name, name), 'w') as f:
             for bit in jinja2.Template(template).stream(**d):
-                f.write(bit.encode('utf-8'))
+                f.write(bit)
 
     subprocess.check_call([
         'kindlegen', '-c1', os.path.join(out_name, '{}.opf'.format(out_name))])

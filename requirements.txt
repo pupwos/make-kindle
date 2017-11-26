@@ -1,4 +1,6 @@
 beautifulsoup4
 cachecontrol[filecache]
-requests_futures
+html5lib
 jinja2
+requests_futures
+six
