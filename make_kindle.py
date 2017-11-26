@@ -10,10 +10,11 @@ import io
 import os
 import re
 import subprocess
+import unicodedata
 from collections import namedtuple
 from functools import partial
 
-from bs4 import BeautifulSoup
+from bs4 import BeautifulSoup, Comment
 from cachecontrol import CacheControl
 from cachecontrol.caches import FileCache
 from cachecontrol.heuristics import ExpiresAfter
@@ -133,7 +134,7 @@ class LitStory(object):
         return "({}; {})".format(self.date, self.rating)
 
     def __repr__(self):
-        return u'Story({!r})'.format(self.id)
+        return 'Story({!r})'.format(self.id)
 
 
 class LitSeries(object):
@@ -145,6 +146,7 @@ class LitSeries(object):
         self.chapters = [s]
         if div:
             self.chapters += [LitStory(a['href']) for a in div.findAll('a')]
+        self.extra = []
 
     @property
     def title(self):
@@ -198,7 +200,7 @@ class TGSChapter(object):
         return '\n'.join(map(str, sub.contents))
 
     def __repr__(self):
-        return u'TGSChapter<{}, chapter={}>'.format(self.title, self.id)
+        return 'TGSChapter<{}, chapter={}>'.format(self.title, self.id)
 
 
 class TGSStory(object):
@@ -231,6 +233,7 @@ class TGSStory(object):
 
         self.chapters = [TGSChapter(req, n, ct[n])
                          for n, req in zip(chaps, self.req_chapters(chaps))]
+        self.extra = []
 
     def req_chapters(self, chapters):
         return [futures.get(tgs_url_fmt.format(self.id, c)) for c in chapters]
@@ -239,7 +242,128 @@ class TGSStory(object):
         return next(iter(self.req_chapters([chapter])))
 
     def __repr__(self):
-        return u'TGSStory({})'.format(self.id)
+        return 'TGSStory({})'.format(self.id)
+
+
+################################################################################
+### fictionmania.tv
+
+# TODO: SWI support
+
+fm_urls = {
+    'x': 'https://fictionmania.tv/stories/readxstory.html?storyID={}',
+    'html': 'https://fictionmania.tv/stories/readhtmlstory.html?storyID={}',
+}
+
+FMChapter = namedtuple('FMChapter', 'id title toc_extra text')
+
+
+class FMExtra(object):
+    def __init__(self, n, path):
+        self.n = n
+        self.path = path
+        self.name = 'extra-{}{}'.format(n, os.path.splitext(path)[1])
+        self.url = 'https://fictionmania.tv' + path
+        self.req = futures.get(self.url)
+
+    @property
+    def result(self):
+        r = self.req.result()
+        if not r.ok:
+            raise IOError("Error on {}: {}".format(self.url, r.status_code))
+        return r
+
+    @property
+    def mimetype(self):
+        return self.result.headers['Content-Type']
+
+    @property
+    def content(self):
+        return self.result.content
+
+    @property
+    def id(self):
+        return 'extra-{}'.format(self.n)
+
+
+class FMStory(object):
+    publisher = 'fictionmania.tv'
+
+    def __init__(self, id, mode=None):
+        if 'fictionmania.tv' in id:
+            r = parse.urlparse(id)
+            assert r.netloc == 'fictionmania.tv'
+            if r.path == '/stories/readxstory.html':
+                if mode is None:
+                    mode = 'x'
+            elif r.path == '/stories/readhtmlstory.html':
+                if mode is None:
+                    mode = 'html'
+            else:
+                raise ValueError("bad URL {}".format(r.path))
+
+            qs = parse.parse_qs(r.query)
+            id, = map(int, qs['storyID'])
+
+        self.id = id
+        if mode is None:
+            mode = 'x'
+        self.mode = mode
+
+        url = fm_urls[mode].format(id)
+
+        p = soupify_request(futures.get(url))
+
+        if mode == 'x':
+            h2, = p.find_all('h2')
+            self.title = h2.text
+
+            self.author = p.select_one(
+                'a[href^="/searchdisplay/authordisplay.html?"]').text
+
+            hrs = p.find_all('hr')
+            end = hrs[-2].parent
+            bits = []
+            for tag in hrs[0].next_siblings:
+                if tag is end:
+                    break
+                bits.append(tag)
+            else:
+                raise ValueError("hr structure was surprising")
+            self.extra = []
+        elif mode == 'html':
+            menu = p.find('div', id='menu')
+
+            self.title = menu.find_next_sibling('p').find('font').text
+
+            tab = menu.find_next_sibling('table')
+            self.author = tab.select_one(
+                'a[href^="/searchdisplay/authordisplay.html?"]').text
+
+            div = tab.find_next_sibling('div')
+
+            self.extra = []
+            for i, x in enumerate(div.find_all(True, {'src': True})):
+                ex = FMExtra(i, x.attrs['src'])
+                self.extra.append(ex)
+                x.attrs['src'] = ex.name
+
+            bits = div.contents
+        else:
+            raise ValueError("bad mode {}".format(mode))
+
+        text = '\n'.join([
+            unicodedata.normalize('NFKC', text_type(b))
+            for b in bits if not isinstance(b, Comment)
+        ]).strip()
+
+        self.chapters = [
+            FMChapter(id=1, title=self.title, toc_extra='', text=text)
+        ]
+
+
+# Chapter should have properties: id, title, toc_extra, text
+# Story should have author, chapters
 
 
 ################################################################################
@@ -250,6 +374,8 @@ def get_story(url):
         return LitSeries(url)
     elif 'tgstorytime.com' in url:
         return TGSStory(url)
+    elif 'fictionmania.tv' in url:
+        return FMStory(url)
     else:
         raise ValueError("can't parse url {}".format(url))
 
@@ -299,8 +425,11 @@ opf_format = r'''
         </dc-metadata>
     </metadata>
     <manifest>
-        <item id="toc" media-type="application/x-dtbncx+xml" href="toc.ncx"/>
-        <item id="text" media-type="text/x-oeb1-document" href="content.html"></item>
+        <item id="toc" media-type="application/x-dtbncx+xml" href="toc.ncx" />
+        <item id="text" media-type="text/x-oeb1-document" href="content.html" />
+        {% for extra in story.extra %}
+          <item id="{{ extra.id }}" media-type="{{ extra.mimetype }}" href="{{ extra.name }}" />
+        {% endfor %}
     </manifest>
     <spine toc="ncx">
         <itemref idref="toc"/>
@@ -359,6 +488,10 @@ def make_mobi(url, out_name=None):
         with io.open(os.path.join(out_name, name), 'w') as f:
             for bit in jinja2.Template(template).stream(**d):
                 f.write(bit)
+
+    for extra in story.extra:
+        with io.open(os.path.join(out_name, extra.name), 'wb') as f:
+            f.write(extra.content)
 
     subprocess.check_call([
         'kindlegen', '-c1', os.path.join(out_name, '{}.opf'.format(out_name))])
