@@ -43,6 +43,16 @@ def soupify_request(req):
 def slugify(s):
     s = unicodedata.normalize('NFKD', s).encode('ascii', 'ignore')
     return re.sub(r'[-\s]+', '-', s.decode('ascii')).lower()
+
+
+def gather_bits(bits):
+    return '\n'.join([
+        unicodedata.normalize('NFKC', text_type(b))
+                   .encode('ascii', 'xmlcharrefreplace').decode('ascii')
+        for b in bits if not isinstance(b, Comment)
+    ]).strip()
+
+
 # Chapter should have properties: id, title, toc_extra, text
 # Story should have id, author, title, publisher, chapters
 
@@ -129,7 +139,7 @@ class LitStory(object):
                 sub, = div.contents
                 assert sub.name == 'div'
                 bits.extend(sub.contents)
-            self._text = '\n'.join(text_type(b) for b in bits)
+            self._text = gather_bits(bits)
 
         return self._text
 
@@ -201,7 +211,7 @@ class TGSChapter(object):
         div = self.soup.find('div', id='story')
         sub, = div.contents
         assert sub.name == 'span'
-        return '\n'.join(map(str, sub.contents))
+        return gather_bits(sub.contents)
 
     def __repr__(self):
         return 'TGSChapter<{}, chapter={}>'.format(self.title, self.id)
@@ -357,10 +367,7 @@ class FMStory(object):
         else:
             raise ValueError("bad mode {}".format(mode))
 
-        text = '\n'.join([
-            unicodedata.normalize('NFKC', text_type(b))
-            for b in bits if not isinstance(b, Comment)
-        ]).strip()
+        text = gather_bits(bits)
 
         self.chapters = [
             FMChapter(id=1, title=self.title, toc_extra='', text=text)
