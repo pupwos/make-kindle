@@ -406,11 +406,14 @@ book_format = r'''
 <head>
     <meta charset="utf-8" />
     <title>{{ story.title }}</title>
+    <style type="text/css">
+        .pagebreak { page-break-before: always; }
+    </style>
 </head>
 <body>
 
 <div id="toc">
-    <h2>Table of Contents</h2>
+    <h1>Table of Contents</h1>
     <ul>
     {% for chap in story.chapters %}
         <li><a href="#{{ chap.id }}">{{ chap.title }}</a> {{ chap.toc_extra }}</li>
@@ -419,6 +422,7 @@ book_format = r'''
 </div>
 <div class="pagebreak"></div>
 
+<div id="book-start"></div>
 {% for chap in story.chapters %}
     <h1 id="{{ chap.id }}">{{ chap.title }}</h1>
 
@@ -445,19 +449,18 @@ opf_format = r'''
         </dc-metadata>
     </metadata>
     <manifest>
-        <item id="toc" media-type="application/x-dtbncx+xml" href="toc.ncx" />
+        <item id="ncx" media-type="application/x-dtbncx+xml" href="toc.ncx" />
         <item id="text" media-type="text/x-oeb1-document" href="content.html" />
         {% for extra in story.extra %}
           <item id="{{ extra.id }}" media-type="{{ extra.mimetype }}" href="{{ extra.name }}" />
         {% endfor %}
     </manifest>
     <spine toc="ncx">
-        <itemref idref="toc"/>
         <itemref idref="text"/>
     </spine>
     <guide>
-        <reference type="toc" title="Table of Contents" href="content.html"/>
-        <reference type="text" title="Book" href="content.html"/>
+        <reference type="toc" title="Table of Contents" href="content.html#toc"/>
+        <reference type="text" title="Book" href="content.html#book-start"/>
     </guide>
 </package>
 '''.strip()
@@ -492,6 +495,7 @@ toc_format = r'''
     </navMap>
 </ncx>
 '''.strip()
+
 
 
 def make_mobi(url, out_name=None):
