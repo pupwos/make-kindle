@@ -65,7 +65,7 @@ class LitStory(object):
             pat = r'https?:\/\/(?:www\.)?literotica.com/s/([^\?]*)\??.*'
             id = re.match(pat, id).group(1)
 
-        self.id = self.default_out_name = text_type(id)
+        self.id = text_type(id)
         self.url = "https://www.literotica.com/s/{}".format(self.id)
         self._meta_dict = None
 
@@ -156,6 +156,7 @@ class LitSeries(object):
 
     def __init__(self, first_story_id):
         self.first = s = LitStory(first_story_id)
+        self.default_out_name = s.id
         div = s.get_page(s.num_pages).find(id='b-series')
         self.chapters = [s]
         if div:
