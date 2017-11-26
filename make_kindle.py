@@ -39,6 +39,10 @@ def soupify_request(req):
         raise IOError("Error: {}".format(r.status_code))
     return soupify(r.content)
 
+
+def slugify(s):
+    s = unicodedata.normalize('NFKD', s).encode('ascii', 'ignore')
+    return re.sub(r'[-\s]+', '-', s.decode('ascii')).lower()
 # Chapter should have properties: id, title, toc_extra, text
 # Story should have id, author, title, publisher, chapters
 
@@ -51,7 +55,7 @@ class LitStory(object):
             pat = r'https?:\/\/(?:www\.)?literotica.com/s/([^\?]*)\??.*'
             id = re.match(pat, id).group(1)
 
-        self.id = text_type(id)
+        self.id = self.default_out_name = text_type(id)
         self.url = "https://www.literotica.com/s/{}".format(self.id)
         self._meta_dict = None
 
@@ -221,6 +225,7 @@ class TGSStory(object):
         self.title, self.author = [
             a.text for a in
             p.find('div', id='pagetitle').find_all('a', recursive=False)]
+        self.default_out_name = slugify(self.title)
 
         ct = {}
         for o in p.find('div', class_='jumpmenu').find_all('option'):
@@ -361,6 +366,8 @@ class FMStory(object):
             FMChapter(id=1, title=self.title, toc_extra='', text=text)
         ]
 
+        self.default_out_name = slugify(self.title)
+
 
 # Chapter should have properties: id, title, toc_extra, text
 # Story should have author, chapters
@@ -478,7 +485,7 @@ def make_mobi(url, out_name=None):
     story = get_story(url)
 
     if out_name is None:
-        out_name = text_type(story.id)
+        out_name = story.default_out_name
     os.makedirs(out_name)
 
     d = {'out_name': out_name, 'story': story}
