@@ -270,6 +270,7 @@ fm_urls = {
     'x': 'https://fictionmania.tv/stories/readxstory.html?storyID={}',
     'html': 'https://fictionmania.tv/stories/readhtmlstory.html?storyID={}',
 }
+fm_js_start = "javascript:newPopwin('"
 
 FMChapter = namedtuple('FMChapter', 'id title toc_extra text')
 
@@ -306,6 +307,10 @@ class FMStory(object):
     publisher = 'fictionmania.tv'
 
     def __init__(self, id, mode=None):
+        if id.startswith(fm_js_start):
+            assert id.endswith("')")
+            id = 'https://fictionmania.tv' + id[len(fm_js_start):-2]
+
         if 'fictionmania.tv' in id:
             r = parse.urlparse(id)
             assert r.netloc == 'fictionmania.tv'
@@ -389,7 +394,7 @@ def get_story(url):
         return LitSeries(url)
     elif 'tgstorytime.com' in url:
         return TGSStory(url)
-    elif 'fictionmania.tv' in url:
+    elif 'fictionmania.tv' in url or url.startswith('javascript:newPopwin'):
         return FMStory(url)
     else:
         raise ValueError("can't parse url {}".format(url))
@@ -508,6 +513,7 @@ def make_mobi(url, out_name=None):
         with io.open(os.path.join(out_name, extra.name), 'wb') as f:
             f.write(extra.content)
 
+    print("Output will be in {}/{}.mobi".format(out_name, out_name))
     subprocess.check_call([
         'kindlegen', '-c1', os.path.join(out_name, '{}.opf'.format(out_name))])
 
