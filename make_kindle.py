@@ -244,6 +244,10 @@ class TGSStory(object):
             pre = '{}. '.format(n)
             assert o.text.startswith(pre)
             ct[n] = o.text[len(pre):]
+
+        if len(ct) == 0:
+            ct[1] = self.title
+
         chaps = range(1, len(ct) + 1)
         assert set(ct) == set(chaps)
 
