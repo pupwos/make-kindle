@@ -9,7 +9,9 @@ from __future__ import print_function, unicode_literals
 import io
 import os
 import re
+import shutil
 import subprocess
+import sys
 import unicodedata
 from collections import namedtuple
 from functools import partial
@@ -502,7 +504,7 @@ toc_format = r'''
 
 
 
-def make_mobi(url, out_name=None):
+def make_mobi(url, out_name=None, move_to=None):
     story = get_story(url)
 
     if out_name is None:
@@ -521,9 +523,24 @@ def make_mobi(url, out_name=None):
         with io.open(os.path.join(out_name, extra.name), 'wb') as f:
             f.write(extra.content)
 
-    print("Output will be in {}/{}.mobi".format(out_name, out_name))
-    subprocess.check_call([
+    # print("Output will be in {}/{}.mobi".format(out_name, out_name))
+    ret = subprocess.call([
         'kindlegen', '-c1', os.path.join(out_name, '{}.opf'.format(out_name))])
+
+    out_path = '{n}/{n}.mobi'.format(n=out_name)
+
+    if ret != 0:
+        if not os.path.exists(out_path):
+            print("ERROR: {}".format(ret), file=sys.stderr)
+            sys.exit(ret)
+
+        print("WARNING: return code {}; proceeding anyway".format(ret),
+              file=sys.stderr)
+
+    dest = os.path.join(move_to, '{}.mobi'.format(out_name))
+    shutil.move(out_path, dest)
+    shutil.rmtree(out_name)
+    print("Output in {}".format(dest))
 
 
 def main():
@@ -531,6 +548,7 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument('url')
     parser.add_argument('out_name', nargs='?')
+    parser.add_argument('--move-to', '-m')
     args = parser.parse_args()
     make_mobi(**vars(args))
 
