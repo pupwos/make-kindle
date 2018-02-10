@@ -44,7 +44,7 @@ def soupify_request(req):
 
 def slugify(s):
     s = unicodedata.normalize('NFKD', s).encode('ascii', 'ignore')
-    return re.sub(r'[-\s]+', '-', s.decode('ascii')).lower()
+    return re.sub(r'[-\s:]+', '-', s.decode('ascii')).lower()
 
 
 def gather_bits(bits):
