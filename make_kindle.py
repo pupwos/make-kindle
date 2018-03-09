@@ -564,10 +564,11 @@ def make_mobi(url, out_name=None, move_to=None):
         print("WARNING: return code {}; proceeding anyway".format(ret),
               file=sys.stderr)
 
-    dest = os.path.join(move_to, '{}.mobi'.format(out_name))
-    shutil.move(out_path, dest)
-    shutil.rmtree(out_name)
-    print("Output in {}".format(dest))
+    if move_to is not None:
+        dest = os.path.join(move_to, '{}.mobi'.format(out_name))
+        shutil.move(out_path, dest)
+        shutil.rmtree(out_name)
+        print("Output in {}".format(dest))
 
 
 def main():
