@@ -576,7 +576,13 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument('url')
     parser.add_argument('out_name', nargs='?')
-    parser.add_argument('--move-to', '-m')
+
+    pth = '/Volumes/Kindle/documents'
+    if os.path.exists(pth) and os.access(pth, os.W_OK|os.X_OK):
+        default = pth
+    else:
+        default = '.'
+    parser.add_argument('--move-to', '-m', default=default)
     args = parser.parse_args()
     make_mobi(**vars(args))
 
