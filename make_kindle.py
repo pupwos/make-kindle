@@ -220,10 +220,16 @@ class TGSChapter(object):
         return 'TGSChapter<{}, chapter={}>'.format(self.title, self.id)
 
 
+tgs_re = re.compile(r"location\s*=\s*'(.*)'")
+
+
 class TGSStory(object):
     publisher = 'tgstorytime.com'
 
     def __init__(self, id):
+        if id.startswith('javascript:'):
+            id = 'https://tgstorytime.com/' + tgs_re.search(id).group(1)
+
         if 'tgstorytime.com/' in id:
             r = parse.urlparse(id)
             assert r.netloc in {'www.tgstorytime.com', 'tgstorytime.com'}
@@ -398,7 +404,7 @@ class FMStory(object):
 def get_story(url):
     if 'literotica.com' in url:
         return LitSeries(url)
-    elif 'tgstorytime.com' in url:
+    elif 'tgstorytime.com' in url or url.startswith("javascript:if(confirm('Age"):
         return TGSStory(url)
     elif 'fictionmania.tv' in url or url.startswith('javascript:newPopwin'):
         return FMStory(url)
