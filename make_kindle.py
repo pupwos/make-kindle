@@ -55,6 +55,33 @@ def gather_bits(bits):
     ]).strip()
 
 
+class Extra(object):
+    def __init__(self, n, path):
+        self.n = n
+        self.path = path
+        self.name = 'extra-{}{}'.format(n, os.path.splitext(path)[1])
+        self.req = futures.get(self.url)
+
+    @property
+    def result(self):
+        r = self.req.result()
+        if not r.ok:
+            raise IOError("Error on {}: {}".format(self.url, r.status_code))
+        return r
+
+    @property
+    def mimetype(self):
+        return self.result.headers['Content-Type']
+
+    @property
+    def content(self):
+        return self.result.content
+
+    @property
+    def id(self):
+        return 'extra-{}'.format(self.n)
+
+
 # Chapter should have properties: id, title, toc_extra, text
 # Story should have id, author, title, publisher, chapters
 
@@ -193,6 +220,12 @@ tgs_url_fmt = ("http://www.tgstorytime.com/viewstory.php?sid={}&chapter={}"
 
 # TODO: story / chapter notes, metadata, ...
 
+class TGSExtra(Extra):
+    @property
+    def url(self):
+        return 'http://www.tgstorytime.com/' + self.path
+
+
 class TGSChapter(object):
     def __init__(self, req, id, title):
         self.req = req
@@ -203,6 +236,14 @@ class TGSChapter(object):
     def soup(self):
         if not hasattr(self, '_soup'):
             self._soup = soupify_request(self.req)
+
+            # populate extras, modify text to refer to it
+            self._extra = []
+            div = self.soup.find('div', id='story')
+            for i, x in enumerate(div.find_all(True, {'src': True})):
+                ex = TGSExtra('{}-{}'.format(self.id, i), x.attrs['src'])
+                self._extra.append(ex)
+                x.attrs['src'] = ex.name
         return self._soup
 
     @property
@@ -215,6 +256,11 @@ class TGSChapter(object):
         sub, = div.contents
         assert sub.name == 'span'
         return gather_bits(sub.contents)
+
+    @property
+    def extra(self):
+        self.soup  # make sure it's populated....
+        return self._extra
 
     def __repr__(self):
         return 'TGSChapter<{}, chapter={}>'.format(self.title, self.id)
@@ -261,7 +307,10 @@ class TGSStory(object):
 
         self.chapters = [TGSChapter(req, n, ct[n])
                          for n, req in zip(chaps, self.req_chapters(chaps))]
-        self.extra = []
+
+    @property
+    def extra(self):
+        return [x for chap in self.chapters for x in chap.extra]
 
     def req_chapters(self, chapters):
         return [futures.get(tgs_url_fmt.format(self.id, c)) for c in chapters]
@@ -287,32 +336,10 @@ fm_js_start = "javascript:newPopwin('"
 FMChapter = namedtuple('FMChapter', 'id title toc_extra text')
 
 
-class FMExtra(object):
-    def __init__(self, n, path):
-        self.n = n
-        self.path = path
-        self.name = 'extra-{}{}'.format(n, os.path.splitext(path)[1])
-        self.url = 'https://fictionmania.tv' + path
-        self.req = futures.get(self.url)
-
+class FMExtra(Extra):
     @property
-    def result(self):
-        r = self.req.result()
-        if not r.ok:
-            raise IOError("Error on {}: {}".format(self.url, r.status_code))
-        return r
-
-    @property
-    def mimetype(self):
-        return self.result.headers['Content-Type']
-
-    @property
-    def content(self):
-        return self.result.content
-
-    @property
-    def id(self):
-        return 'extra-{}'.format(self.n)
+    def url(self):
+        return 'https://fictionmania.tv' + self.path
 
 
 class FMStory(object):
@@ -543,10 +570,11 @@ def make_mobi(url, out_name=None, move_to=None):
         print("WARNING: return code {}; proceeding anyway".format(ret),
               file=sys.stderr)
 
-    dest = os.path.join(move_to, '{}.mobi'.format(out_name))
-    shutil.move(out_path, dest)
-    shutil.rmtree(out_name)
-    print("Output in {}".format(dest))
+    if move_to is not None:
+        dest = os.path.join(move_to, '{}.mobi'.format(out_name))
+        shutil.move(out_path, dest)
+        shutil.rmtree(out_name)
+        print("Output in {}".format(dest))
 
 
 def main():
@@ -554,7 +582,13 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument('url')
     parser.add_argument('out_name', nargs='?')
-    parser.add_argument('--move-to', '-m')
+
+    pth = '/Volumes/Kindle/documents'
+    if os.path.exists(pth) and os.access(pth, os.W_OK|os.X_OK):
+        default = pth
+    else:
+        default = '.'
+    parser.add_argument('--move-to', '-m', default=default)
     args = parser.parse_args()
     make_mobi(**vars(args))
 
