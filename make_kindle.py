@@ -48,7 +48,7 @@ def slugify(s):
 
 
 def gather_bits(bits):
-    return '\n'.join([
+    return ''.join([
         unicodedata.normalize('NFKC', text_type(b))
                    .encode('ascii', 'xmlcharrefreplace').decode('ascii')
         for b in bits if not isinstance(b, Comment)
