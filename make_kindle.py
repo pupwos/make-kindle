@@ -588,7 +588,10 @@ def main():
         default = pth
     else:
         default = '.'
-    parser.add_argument('--move-to', '-m', default=default)
+    g = parser.add_mutually_exclusive_group()
+    g.add_argument('--move-to', '-m', default=default)
+    g.add_argument('--no-move', dest='move_to',
+                   action='store_const', const=None)
     args = parser.parse_args()
     make_mobi(**vars(args))
 
