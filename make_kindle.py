@@ -46,6 +46,9 @@ def slugify(s):
     s = unicodedata.normalize('NFKD', s).encode('ascii', 'ignore')
     return re.sub(r'[-\s:]+', '-', s.decode('ascii')).lower()
 
+def stripright(s, end):
+    return s[:-len(end)] if s.endswith(end) else s
+
 
 def gather_bits(bits):
     return ''.join([
@@ -82,14 +85,29 @@ class Extra(object):
         return 'extra-{}'.format(self.n)
 
 
-# Chapter should have properties: id, title, toc_extra, text
-# Story should have id, author, title, publisher, chapters
+class Chapter(object):
+    # should implement: id, title, toc_extra, text, notes_pre, notes_post
+    notes_pre = property(lambda self: [])
+    notes_post = property(lambda self: [])
+
+
+class Story(object):
+    # should implement: id, author, title, publisher, chapters
+
+    @property
+    def any_notes(self):
+        return any(any(True for n in c.notes_pre) or
+                   any(True for n in c.notes_post)
+                   for c in self.chapters)
+
 
 ################################################################################
 ### literotica
 
-class LitStory(object):
+class LitStory(Chapter):
     def __init__(self, id):
+        super(LitStory, self).__init__()
+
         if 'literotica.com/' in id:
             pat = r'https?:\/\/(?:www\.)?literotica.com/s/([^\?]*)\??.*'
             id = re.match(pat, id).group(1)
@@ -180,10 +198,12 @@ class LitStory(object):
         return 'Story({!r})'.format(self.id)
 
 
-class LitSeries(object):
+class LitSeries(Story):
     publisher = 'Literotica.com'
 
     def __init__(self, first_story_id):
+        super(LitSeries, self).__init__()
+
         self.first = s = LitStory(first_story_id)
         self.default_out_name = s.id
         div = s.get_page(s.num_pages).find(id='b-series')
@@ -226,8 +246,10 @@ class TGSExtra(Extra):
         return 'http://www.tgstorytime.com/' + self.path
 
 
-class TGSChapter(object):
+class TGSChapter(Chapter):
     def __init__(self, req, id, title):
+        super(TGSChapter, self).__init__()
+
         self.req = req
         self.id = id
         self.title = title
@@ -257,6 +279,22 @@ class TGSChapter(object):
         assert sub.name == 'span'
         return gather_bits(sub.contents)
 
+    def _get_notes(self, method_name):
+        story = self.soup.find('div', id='story')
+        notes = getattr(story, method_name)('div', class_='notes')
+        return [
+            (stripright(note.find(class_='title').text.strip(), ':'),
+             gather_bits(note.find(class_='noteinfo').contents))
+            for note in notes]
+
+    @property
+    def notes_pre(self):
+        return reversed(self._get_notes('find_previous_siblings'))
+
+    @property
+    def notes_post(self):
+        return self._get_notes('find_next_siblings')
+
     @property
     def extra(self):
         self.soup  # make sure it's populated....
@@ -269,10 +307,12 @@ class TGSChapter(object):
 tgs_re = re.compile(r"location\s*=\s*'(.*)'")
 
 
-class TGSStory(object):
+class TGSStory(Story):
     publisher = 'tgstorytime.com'
 
     def __init__(self, id):
+        super(TGSStory, self).__init__()
+
         if id.startswith('javascript:'):
             id = 'https://tgstorytime.com/' + tgs_re.search(id).group(1)
 
@@ -333,7 +373,13 @@ fm_urls = {
 }
 fm_js_start = "javascript:newPopwin('"
 
-FMChapter = namedtuple('FMChapter', 'id title toc_extra text')
+_FMChapter = namedtuple('_FMChapter',
+                        'id title toc_extra text notes_pre notes_post')
+class FMChapter(Chapter, _FMChapter):
+    def __new__(cls, *args, **kwargs):
+        self = _FMChapter.__new__(cls, *args, **kwargs)
+        Chapter.__init__(self)
+        return self
 
 
 class FMExtra(Extra):
@@ -342,10 +388,12 @@ class FMExtra(Extra):
         return 'https://fictionmania.tv' + self.path
 
 
-class FMStory(object):
+class FMStory(Story):
     publisher = 'fictionmania.tv'
 
     def __init__(self, id, mode=None):
+        super(FMStory, self).__init__()
+
         if id.startswith(fm_js_start):
             assert id.endswith("')")
             id = 'https://fictionmania.tv' + id[len(fm_js_start):-2]
@@ -415,7 +463,8 @@ class FMStory(object):
         text = gather_bits(bits)
 
         self.chapters = [
-            FMChapter(id=1, title=self.title, toc_extra='', text=text)
+            FMChapter(id=1, title=self.title, toc_extra='', text=text,
+                      notes_pre=[], notes_post=[])
         ]
 
         self.default_out_name = slugify(self.title)
@@ -447,6 +496,9 @@ book_format = r'''
     <title>{{ story.title }}</title>
     <style type="text/css">
         .pagebreak { page-break-before: always; }
+
+        h1, h2 { text-align: center; }
+        .notelink { text-align: center; }
     </style>
 </head>
 <body>
@@ -454,9 +506,12 @@ book_format = r'''
 <div id="toc">
     <h1>Table of Contents</h1>
     <ul>
-    {% for chap in story.chapters %}
-        <li><a href="#{{ chap.id }}">{{ chap.title }}</a> {{ chap.toc_extra }}</li>
-    {% endfor %}
+        {% for chap in story.chapters %}
+            <li><a href="#{{ chap.id }}">{{ chap.title }}</a> {{ chap.toc_extra }}</li>
+        {% endfor %}
+        {% if story.any_notes %}
+            <li><a href="#notes">Notes</a></li>
+        {% endif %}
     </ul>
 </div>
 <div class="pagebreak"></div>
@@ -464,13 +519,52 @@ book_format = r'''
 <div id="book-start"></div>
 {% for chap in story.chapters %}
     <h1 id="{{ chap.id }}">{{ chap.title }}</h1>
+    {% for name, text in chap.notes_pre %}
+        {% with key = "note-{}-pre-{}".format(chap.id, loop.index) %}
+            <div class="notelink">
+                <a id="source-{{ key }}" href="#{{ key }}"
+                   epub:type="noteref">{{ name }}</a>
+            </div>
+        {% endwith %}
+        <br/>
+    {% endfor %}
 
     {{ chap.text }}
 
-    {% if not loop.last %}
-        <div class="pagebreak"></div>
-    {% endif %}
+    {% for name, text in chap.notes_post %}
+        {% with key = "note-{}-post-{}".format(chap.id, loop.index) %}
+            <a id="source-{{ key }}" href="#{{ key }}" epub:type="noteref">{{ name }}</a>
+        {% endwith %}
+        <br>
+    {% endfor %}
+
+    <div class="pagebreak"></div>
 {% endfor %}
+
+{% if story.any_notes %}
+    <h1 id="notes">Notes</h1>
+    {% for chap in story.chapters %}
+        {% for name, text in chap.notes_pre %}
+            {% with key = "note-{}-pre-{}".format(chap.id, loop.index) %}
+                <aside id="{{ key }}" epub:type="footnote">
+                    <a epub:type="noteref" href="#source-{{ key }}">{{ chap.title}}: {{ name }}</a>
+                    {{ text }}
+                </aside>
+                <hr/>
+            {% endwith %}
+        {% endfor %}
+        {% for name, text in chap.notes_post %}
+            {% with key = "note-{}-post-{}".format(chap.id, loop.index) %}
+                <aside id="{{ key }}" epub:type="footnote">
+                    <a epub:type="noteref" href="#source-{{ key }}">{{ chap.title}}: {{ name }}</a>
+                    {{ text }}
+                </aside>
+                <hr/>
+            {% endwith %}
+        {% endfor %}
+    {% endfor %}
+{% endif %}
+
 </body>
 </html>
 '''.strip()
@@ -531,25 +625,29 @@ toc_format = r'''
             <content src="content.html#{{ chapter.id }}" />
         </navPoint>
         {% endfor %}
+        {% if story.any_notes %}
+        <navPoint id="notes" playOrder="{{ story.chapters|length + 2 }}">
+            <navLabel><text>Notes</text></navLabel>
+            <content src="content.html#notes" />
+        </navPoint>
+        {% endif %}
     </navMap>
 </ncx>
 '''.strip()
 
 
-
-def make_mobi(url, out_name=None, move_to=None):
-    story = get_story(url)
-
+def make_mobi(story, out_name=None, move_to=None):
     if out_name is None:
         out_name = story.default_out_name
     os.makedirs(out_name)
 
+    env = jinja2.Environment(undefined=jinja2.StrictUndefined)
     d = {'out_name': out_name, 'story': story}
     for name, template in [('toc.ncx', toc_format),
                            ('{}.opf'.format(out_name), opf_format),
                            ('content.html', book_format)]:
         with io.open(os.path.join(out_name, name), 'w') as f:
-            for bit in jinja2.Template(template).stream(**d):
+            for bit in env.from_string(template).stream(**d):
                 f.write(bit)
 
     for extra in story.extra:
@@ -593,7 +691,9 @@ def main():
     g.add_argument('--no-move', dest='move_to',
                    action='store_const', const=None)
     args = parser.parse_args()
-    make_mobi(**vars(args))
+
+    story = get_story(args.url)
+    make_mobi(story, out_name=args.out_name, move_to=args.move_to)
 
 
 if __name__ == '__main__':
