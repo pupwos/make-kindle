@@ -498,7 +498,7 @@ book_format = r'''
         .pagebreak { page-break-before: always; }
 
         h1, h2 { text-align: center; }
-        .notelink { text-align: center; }
+        .notelink { text-align: center; font-size: 70%; margin: 2ex; }
     </style>
 </head>
 <body>
@@ -526,16 +526,16 @@ book_format = r'''
                    epub:type="noteref">{{ name }}</a>
             </div>
         {% endwith %}
-        <br/>
     {% endfor %}
 
     {{ chap.text }}
 
     {% for name, text in chap.notes_post %}
         {% with key = "note-{}-post-{}".format(chap.id, loop.index) %}
-            <a id="source-{{ key }}" href="#{{ key }}" epub:type="noteref">{{ name }}</a>
+            <div class="notelink">
+                <a id="source-{{ key }}" href="#{{ key }}" epub:type="noteref">{{ name }}</a>
+            </div>
         {% endwith %}
-        <br>
     {% endfor %}
 
     <div class="pagebreak"></div>
@@ -594,6 +594,7 @@ opf_format = r'''
     <guide>
         <reference type="toc" title="Table of Contents" href="content.html#toc"/>
         <reference type="text" title="Book" href="content.html#book-start"/>
+        <reference type="notes" title="Notes" href="content.html#notes"/>
     </guide>
 </package>
 '''.strip()
