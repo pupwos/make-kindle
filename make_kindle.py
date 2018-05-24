@@ -46,6 +46,7 @@ def slugify(s):
     s = unicodedata.normalize('NFKD', s).encode('ascii', 'ignore')
     return re.sub(r'[-\s:]+', '-', s.decode('ascii')).lower()
 
+
 def stripright(s, end):
     return s[:-len(end)] if s.endswith(end) else s
 
@@ -92,8 +93,8 @@ class Chapter(object):
 
 
 class Story(object):
-    # should implement: id, author, title, publisher, chapters
-
+    # should implement: id, author, title, publisher, chapters,
+    #                   extra, default_out_name
     @property
     def any_notes(self):
         return any(any(True for n in c.notes_pre) or
@@ -676,19 +677,22 @@ def make_mobi(story, out_name=None, move_to=None):
         print("Output in {}".format(dest))
 
 
+def default_move_to():
+    paths = ['/Volumes/Kindle/documents', '.']
+    for pth in paths:
+        if os.path.exists(pth) and os.access(pth, os.W_OK | os.X_OK):
+            return pth
+    return None
+
+
 def main():
     import argparse
     parser = argparse.ArgumentParser()
     parser.add_argument('url')
     parser.add_argument('out_name', nargs='?')
 
-    pth = '/Volumes/Kindle/documents'
-    if os.path.exists(pth) and os.access(pth, os.W_OK|os.X_OK):
-        default = pth
-    else:
-        default = '.'
     g = parser.add_mutually_exclusive_group()
-    g.add_argument('--move-to', '-m', default=default)
+    g.add_argument('--move-to', '-m', default=default_move_to())
     g.add_argument('--no-move', dest='move_to',
                    action='store_const', const=None)
     args = parser.parse_args()
