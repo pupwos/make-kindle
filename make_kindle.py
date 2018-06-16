@@ -87,19 +87,22 @@ class Extra(object):
 
 
 class Chapter(object):
-    # should implement: id, title, toc_extra, text, notes_pre, notes_post
+    # should implement: id, title, toc_extra, text
     notes_pre = property(lambda self: [])
     notes_post = property(lambda self: [])
 
 
 class Story(object):
-    # should implement: id, author, title, publisher, chapters,
-    #                   extra, default_out_name
+    # should implement: id, author, title, publisher, chapters, extra
     @property
     def any_notes(self):
         return any(any(True for n in c.notes_pre) or
                    any(True for n in c.notes_post)
                    for c in self.chapters)
+
+    @property
+    def default_out_name(self):
+        return slugify(self.title)
 
 
 ################################################################################
@@ -206,7 +209,6 @@ class LitSeries(Story):
         super(LitSeries, self).__init__()
 
         self.first = s = LitStory(first_story_id)
-        self.default_out_name = s.id
         div = s.get_page(s.num_pages).find(id='b-series')
         self.chapters = [s]
         if div:
@@ -227,6 +229,10 @@ class LitSeries(Story):
     @property
     def id(self):
         return self.first.id
+
+    @property
+    def default_out_name(self):
+        return self.id
 
 
 ################################################################################
@@ -331,7 +337,6 @@ class TGSStory(Story):
         self.title, self.author = [
             a.text for a in
             p.find('div', id='pagetitle').find_all('a', recursive=False)]
-        self.default_out_name = slugify(self.title)
 
         ct = {}
         for o in p.find('div', class_='jumpmenu').find_all('option'):
@@ -468,11 +473,72 @@ class FMStory(Story):
                       notes_pre=[], notes_post=[])
         ]
 
-        self.default_out_name = slugify(self.title)
+
+################################################################################
+###
+
+class MCSChapter(Chapter):
+    def __init__(self, req, id, title, toc_extra):
+        super(MCSChapter, self).__init__()
+
+        self.req = req
+        self.id = id
+        self.title = title
+        self.toc_extra = toc_extra
+
+    @property
+    def soup(self):
+        if not hasattr(self, '_soup'):
+            self._soup = soupify_request(self.req)
+        return self._soup
+
+    @property
+    def text(self):
+        return gather_bits(
+            x
+            for sec in self.soup('article')[0]('section', recursive=False)
+            for x in sec)
+
+    # TODO: notes_pre, notes_post; don't seem entirely consistent
 
 
-# Chapter should have properties: id, title, toc_extra, text
-# Story should have author, chapters
+class MCSStory(Story):
+    publisher = 'mcstories.com'
+
+    def __init__(self, id):
+        super(MCSStory, self).__init__()
+
+        if 'mcstories.com' in id:
+            r = parse.urlparse(id)
+            assert r.netloc == 'mcstories.com'
+            assert r.path.startswith('/')
+            id = r.path[1:].split('/')[0]
+        self.id = id
+
+        url = 'https://mcstories.com/{}/'.format(id)
+        p = soupify_request(futures.get(url))
+
+        self.title = p.find('h3', class_='title').text.strip()
+        self.author = p.find('h3', class_='byline').text.strip()
+        assert self.author.startswith('by ')
+        self.author = self.author[3:]
+
+        self.extra = []
+
+        self.chapters = []
+        tab = p.find('table', id='index')
+        if tab is not None:
+            for i, tr in enumerate(tab.find_all('tr')):
+                if i == 0:
+                    assert tr.find('th').text.strip() == 'Chapter'
+                    continue
+
+                name, length, added = tr.find_all('td')
+                a = name.find('a')
+                assert '/' not in a['href']
+                self.chapters.append(MCSChapter(
+                    futures.get(url + a['href']),
+                    i, name.text, added.text))
 
 
 ################################################################################
@@ -485,6 +551,8 @@ def get_story(url):
         return TGSStory(url)
     elif 'fictionmania.tv' in url or url.startswith('javascript:newPopwin'):
         return FMStory(url)
+    elif 'mcstories.com' in url:
+        return MCSStory(url)
     else:
         raise ValueError("can't parse url {}".format(url))
 
