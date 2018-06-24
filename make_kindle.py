@@ -539,6 +539,11 @@ class MCSStory(Story):
                 self.chapters.append(MCSChapter(
                     futures.get(url + a['href']),
                     i, name.text, added.text))
+        else:
+            a = p.find('div', class_='chapter').find('a')
+            self.chapters.append(MCSChapter(
+                futures.get(url + a['href']),
+                1, a.text, ''))
 
 
 ################################################################################
