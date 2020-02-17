@@ -43,8 +43,9 @@ def soupify_request(req):
 
 
 def slugify(s):
-    s = unicodedata.normalize('NFKD', s).encode('ascii', 'ignore')
-    return re.sub(r'[-\s:]+', '-', s.decode('ascii')).lower()
+    s = unicodedata.normalize('NFKD', s).encode('ascii', 'ignore').decode("ascii")
+    s = re.sub(r'(^-+)|(-+$)', '', re.sub(r'[-\s:!\'",\.]+', '-', s))
+    return s.lower()
 
 
 def stripright(s, end):
