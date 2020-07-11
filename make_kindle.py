@@ -6,6 +6,7 @@
 
 from __future__ import print_function, unicode_literals
 
+import hashlib
 import io
 import os
 import re
@@ -16,7 +17,19 @@ import unicodedata
 from collections import namedtuple
 from functools import partial
 
-from bs4 import BeautifulSoup, Comment
+try:
+    from functools import lru_cache
+except ImportError:
+
+    # fake cache that doesn't do anything
+    def lru_cache(maxsize=128, typed=False):
+        if callable(maxsize):
+            return maxsize
+        else:
+            return lambda f: f
+
+
+from bs4 import BeautifulSoup, Comment, Tag
 from cachecontrol import CacheControl
 from cachecontrol.caches import FileCache
 from cachecontrol.heuristics import ExpiresAfter
@@ -49,6 +62,11 @@ def slugify(s):
     return s.lower()
 
 
+@lru_cache(maxsize=512)
+def hashify(s, alg="sha1"):
+    return getattr(hashlib, alg)(s.encode("utf-8")).hexdigest()
+
+
 def stripright(s, end):
     return s[: -len(end)] if s.endswith(end) else s
 
@@ -66,11 +84,17 @@ def gather_bits(bits):
 
 
 class Extra(object):
+    # should implement: url
     def __init__(self, n, path):
         self.n = n
         self.path = path
         self.name = "extra-{}{}".format(n, os.path.splitext(path)[1])
         self.req = futures.get(self.url)
+        self.attrs = {}
+
+    @property
+    def extra_attrs(self):
+        return " ".join('{}="{}"'.format(k, v) for k, v in self.attrs.items())
 
     @property
     def result(self):
@@ -710,6 +734,221 @@ class AO3Chapter(Chapter):
 
 
 ################################################################################
+# Scribble Hub
+
+sh_series_re = re.compile(r"^/series/(\d+)/([^/]+)/")
+sh_chapter_re = re.compile(r"^/read/(\d+)-([^/]+)/chapter/(\d+)/$")
+sh_series_fmt = "https://www.scribblehub.com/series/{}/{}/"
+sh_chapter_fmt = "https://www.scribblehub.com/read/{}-{}/chapter/{}"
+
+_sh_extras = {}
+
+_sh_emoji_css = None
+_sh_emoji_map = {}
+_sh_emoji_css_url = (
+    "https://www.scribblehub.com/wp-content/themes/writeit-child/js/fic_emojis.css"
+)
+_sh_emoji_loc = re.compile(r"background:\s*url\(([^)]+)\)")
+
+
+def get_sh_emoji_url(name):
+    global _sh_emoji_css
+    if name not in _sh_emoji_map:
+        if _sh_emoji_css is None:
+            r = cached.get(_sh_emoji_css_url)
+            if not r.ok:
+                raise IOError("Error: {}".format(r.status_code))
+            _sh_emoji_css = r.text
+
+        header = ".{}{{".format(name)
+        start = _sh_emoji_css.index(header)
+        end = _sh_emoji_css.index("}", start)
+        block = _sh_emoji_css[start + len(header) : end]
+        url = _sh_emoji_loc.search(block).group(1)
+        _sh_emoji_map[name] = parse.urljoin(_sh_emoji_css_url, url)
+
+    return _sh_emoji_map[name]
+
+
+def get_sh_extra(url):
+    if url not in _sh_extras:
+        _sh_extras[url] = ScribbleHubExtra(url)
+    return _sh_extras[url]
+
+
+class ScribbleHubExtra(Extra):
+    def __init__(self, url):
+        self.url = url
+        path = parse.urlparse(url).path
+        super(ScribbleHubExtra, self).__init__(hashify(url), path)
+
+
+class ScribbleHubStory(Story):
+    publisher = "scribblehub.com"
+
+    def __init__(self, id, slug=None):
+        super(ScribbleHubStory, self).__init__()
+
+        if "scribblehub.com/" in id:
+            r = parse.urlparse(id)
+            assert r.netloc in {"scribblehub.com", "www.scribblehub.com"}
+            m = sh_series_re.match(r.path)
+            if m:
+                id, slug = m.groups()
+            else:
+                m = sh_chapter_re.match(r.path)
+                if m:
+                    id, slug, _ = m.groups()
+                else:
+                    raise ValueError("Can't parse url {!r}".format(id))
+
+        self.id = int(id)
+        self.slug = slug
+        self.url = sh_series_fmt.format(self.id, self.slug)
+
+        p = soupify_request(futures.get(self.url))
+        self.author = p.select_one(".auth_name_fic").text.strip()
+        self.title = p.select_one(".fic_title").text.strip()
+        self.cover_img = get_sh_extra(p.select_one(".fic_image img").attrs["src"])
+        self.cover_img.attrs["properties"] = "cover-image"
+
+        chaps_ul = soupify_request(
+            futures.post(
+                "https://www.scribblehub.com/wp-admin/admin-ajax.php",
+                data={
+                    "action": "wi_gettocchp",
+                    "strSID": self.id,
+                    "strmypostid": "0",
+                    "strFic": "yes",
+                },
+            )
+        )
+        self.chapters = [
+            ScribbleHubChapter(a.attrs["href"], gather_bits([a.attrs["title"]]))
+            for a in reversed(chaps_ul.select(".li_toc a"))
+        ]
+
+    def __repr__(self):
+        return "ScribbleHubStory({!r})".format(self.id)
+
+    @property
+    def extra(self):
+        extra_urls = set().union(*(chap.get_extra_urls() for chap in self.chapters))
+        return [self.cover_img] + [get_sh_extra(url) for url in extra_urls]
+
+
+class ScribbleHubChapter(Chapter):
+    def __init__(self, url, title):
+        self.url = url
+        self.title = title
+        self.series_id, self.slug, self.chapter_id = sh_chapter_re.match(
+            parse.urlparse(url).path
+        ).groups()
+        self.id = "{}_{}".format(self.series_id, self.chapter_id)
+        self.req = futures.get(self.url)
+        self.toc_extra = ""
+        self.extra_urls = set()
+
+    def __repr__(self):
+        return "ScribbleHubChapter({!r}, {!r})".format(self.url, self.title)
+
+    @property
+    def soup(self):
+        if not hasattr(self, "_soup"):
+            self._soup = soupify_request(self.req)
+        return self._soup
+
+    def get_extra_urls(self):
+        # make sure we've processed everything
+        self.text
+        self.notes_pre
+        self.notes_post
+        return self.extra_urls
+
+    def handle_extras(self, soup):
+        for x in soup.find_all(True, {"src": True}):
+            if x.attrs["src"].startswith("extra-"):
+                continue
+
+            if "mceSmilieSprite" in x.get("class", []):
+                url = get_sh_emoji_url(
+                    next(
+                        c
+                        for c in x["class"]
+                        if c.startswith("mceSmilie") and c != "mceSmilieSprite"
+                    )
+                )
+            else:
+                url = x.attrs["src"]
+            self.extra_urls.add(url)
+            x.attrs["src"] = get_sh_extra(url).name
+        return soup
+
+    @property
+    def text(self):
+        if not hasattr(self, "_text"):
+            self._text = gather_bits(
+                [
+                    self.handle_extras(bit)
+                    for bit in self.soup.select_one("#chp_raw")
+                    if isinstance(bit, Tag)
+                    and not any(c.startswith("wi_") for c in bit.get("class", []))
+                ]
+            )
+        return self._text
+
+    @property
+    def notes_pre(self):
+        if not hasattr(self, "_notes_pre"):
+            self._notes_pre = [
+                (
+                    n.select_one(".wi_news_title").text.strip(),
+                    gather_bits(n.select_one(".wi_news_body")),
+                )
+                for n in self.soup.select(".wi_news")
+            ]
+        return self._notes_pre
+
+    @property
+    def notes_post(self):
+        if not hasattr(self, "_notes_post"):
+            self._notes_post = [
+                ("Author's Note", gather_bits(note.contents))
+                for note in self.soup.select(".wi_authornotes_body")
+            ]
+
+            # TODO: actually handle pagination and replies?
+            comment_page = soupify_request(
+                futures.post(
+                    "https://www.scribblehub.com/wp-admin/admin-ajax.php",
+                    data=dict(
+                        action="wi_getcomment_pagination_chapters",
+                        pagenum=1,
+                        comments_perpage=100,
+                        mypostid=self.chapter_id,
+                    ),
+                )
+            )
+            comments = []
+            for c in comment_page.select(".comment-body"):
+                comments.append(
+                    "<h3><b>{}</b> ({})</h3>{}".format(
+                        c.select_one(".comment-author span.fn").text.strip(),
+                        c.select_one(".com_date").text.strip(),
+                        gather_bits(
+                            self.handle_extras(c.select_one(".comment")).contents
+                        ).strip(),
+                    )
+                )
+            if comments:
+                self._notes_post.append(
+                    ("{} comments".format(len(comments)), "\n".join(comments))
+                )
+
+        return self._notes_post
+
+
+################################################################################
 ### kindle generation and main logic
 
 
@@ -724,6 +963,8 @@ def get_story(url):
         return MCSStory(url)
     elif "archiveofourown.org" in url:
         return AO3Story(url)
+    elif "scribblehub.com" in url:
+        return ScribbleHubStory(url)
     else:
         raise ValueError("can't parse url {}".format(url))
 
@@ -825,7 +1066,7 @@ opf_format = r"""
         <item id="ncx" media-type="application/x-dtbncx+xml" href="toc.ncx" />
         <item id="text" media-type="text/x-oeb1-document" href="content.html" />
         {% for extra in story.extra %}
-          <item id="{{ extra.id }}" media-type="{{ extra.mimetype }}" href="{{ extra.name }}" />
+          <item id="{{ extra.id }}" media-type="{{ extra.mimetype }}" href="{{ extra.name }}" {{ extra.extra_attrs }} />
         {% endfor %}
     </manifest>
     <spine toc="ncx">
