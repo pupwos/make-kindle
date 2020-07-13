@@ -1047,7 +1047,8 @@ book_format = r"""
     {% for name, text in chap.notes_post %}
         {% with key = "note-{}-post-{}".format(chap.id, loop.index) %}
             <div class="notelink">
-                <a id="source-{{ key }}" href="#{{ key }}" epub:type="noteref">{{ name }}</a>
+                <a id="source-{{ key }}" href="#{{ key }}"
+                   epub:type="noteref">{{ name }}</a>
             </div>
         {% endwith %}
     {% endfor %}
@@ -1061,7 +1062,8 @@ book_format = r"""
         {% for name, text in chap.notes_pre %}
             {% with key = "note-{}-pre-{}".format(chap.id, loop.index) %}
                 <aside id="{{ key }}" epub:type="footnote">
-                    <a epub:type="noteref" href="#source-{{ key }}">{{ chap.title}}: {{ name }}</a>
+                    <a epub:type="noteref" href="#source-{{ key }}"
+                        >{{ chap.title}}: {{ name }}</a>
                     {{ text }}
                 </aside>
                 <hr/>
@@ -1070,12 +1072,14 @@ book_format = r"""
         {% for name, text in chap.notes_post %}
             {% with key = "note-{}-post-{}".format(chap.id, loop.index) %}
                 <aside id="{{ key }}" epub:type="footnote">
-                    <a epub:type="noteref" href="#source-{{ key }}">{{ chap.title}}: {{ name }}</a>
+                    <a epub:type="noteref" href="#source-{{ key }}"
+                        >{{ chap.title}}: {{ name }}</a>
                     {{ text }}
                 </aside>
                 <hr/>
             {% endwith %}
         {% endfor %}
+        {% if not loop.last %}<div class="pagebreak"></div>{% endif %}
     {% endfor %}
 {% endif %}
 
@@ -1085,9 +1089,12 @@ book_format = r"""
 
 opf_format = r"""
 <?xml version="1.0" encoding="iso-8859-1"?>
-<package unique-identifier="uid" xmlns:opf="http://www.idpf.org/2007/opf" xmlns:asd="http://www.idpf.org/asdfaf">
+<package unique-identifier="uid"
+         xmlns:opf="http://www.idpf.org/2007/opf"
+         xmlns:asd="http://www.idpf.org/asdfaf">
     <metadata>
-        <dc-metadata  xmlns:dc="http://purl.org/metadata/dublin_core" xmlns:oebpackage="http://openebook.org/namespaces/oeb-package/1.0/">
+        <dc-metadata xmlns:dc="http://purl.org/metadata/dublin_core"
+                     xmlns:oebpackage="http://openebook.org/namespaces/oeb-package/1.0/">
             <dc:Title>{{ story.title }}</dc:Title>
             <dc:Language>en</dc:Language>
             <dc:Creator>{{ story.author }}</dc:Creator>
@@ -1099,7 +1106,10 @@ opf_format = r"""
         <item id="ncx" media-type="application/x-dtbncx+xml" href="toc.ncx" />
         <item id="text" media-type="text/x-oeb1-document" href="content.html" />
         {% for extra in story.extra %}
-          <item id="{{ extra.id }}" media-type="{{ extra.mimetype }}" href="{{ extra.name }}" {{ extra.extra_attrs }} />
+          <item id="{{ extra.id }}"
+                media-type="{{ extra.mimetype }}"
+                href="{{ extra.name }}"
+                {{ extra.extra_attrs }} />
         {% endfor %}
     </manifest>
     <spine toc="ncx">
