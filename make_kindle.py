@@ -912,31 +912,60 @@ class ScribbleHubChapter(Chapter):
             )
         return self._text
 
+    def handle_note(self, block, clsname):
+        if clsname == "wi_news":
+            return (
+                gather_bits(block.select_one(".wi_news_title")),
+                gather_bits(self.handle_extras(block.select_one(".wi_news_body"))),
+            )
+        elif clsname == "wi_authornotes":
+            return (
+                "Author's Note",
+                gather_bits(
+                    self.handle_extras(block.select_one(".wi_authornotes_body"))
+                ),
+            )
+        else:
+            raise ValueError("unknown class {}".format(clsname))
+
+    def find_notes(self, entries, cutoff=5):
+        notes = []
+        for chunk, i in zip(entries, range(cutoff)):
+            if isinstance(chunk, Tag):
+                classes = chunk.get("class", [])
+                c = next((c for c in classes if c.startswith("wi_")), None)
+                if c:
+                    notes.append(self.handle_note(chunk, c))
+        return notes
+
     @property
     def notes_pre(self):
         if not hasattr(self, "_notes_pre"):
-            self._notes_pre = [
-                (
-                    n.select_one(".wi_news_title").text.strip(),
-                    gather_bits(n.select_one(".wi_news_body")),
-                )
-                for n in self.soup.select(".wi_news")
-            ]
+            self._notes_pre = self.find_notes(self.soup.select_one("#chp_raw").contents)
         return self._notes_pre
 
     @property
     def notes_post(self):
         if not hasattr(self, "_notes_post"):
-            self._notes_post = [
-                ("Author's Note", gather_bits(note.contents))
-                for note in self.soup.select(".wi_authornotes_body")
-            ]
+            backwards = reversed(self.soup.select_one("#chp_raw").contents)
+            self._notes_post = list(reversed(self.find_notes(backwards)))
 
             # TODO: actually handle pagination and replies?
             comments = []
             for c in self.comments_soup.select(".comment-body"):
+                body = c.select_one(".comment")
+                for b in body.select("div.cmtquote"):
+                    text = b.select_one(".profilereportpop_quote_qt")
+                    text.name = "blockquote"
+                    text.attrs = {}
+                    b.replace_with(text)
+
+                cl = next(cl for cl in c["class"] if cl.startswith("depth_"))
+                depth = int(cl[len("depth_"):])
+
                 comments.append(
-                    "<h3><b>{}</b> ({})</h3>{}".format(
+                    "<div style='margin-left: {}em'><h3><b>{}</b> ({})</h3>{}</div>".format(
+                        (depth - 1) * 2,
                         c.select_one(".comment-author span.fn").text.strip(),
                         c.select_one(".com_date").text.strip(),
                         gather_bits(
