@@ -846,6 +846,15 @@ class ScribbleHubChapter(Chapter):
         ).groups()
         self.id = "{}_{}".format(self.series_id, self.chapter_id)
         self.req = futures.get(self.url)
+        self.comments_req = futures.post(
+            "https://www.scribblehub.com/wp-admin/admin-ajax.php",
+            data=dict(
+                action="wi_getcomment_pagination_chapters",
+                pagenum=1,
+                comments_perpage=100,
+                mypostid=self.chapter_id,
+            ),
+        )
         self.toc_extra = ""
         self.extra_urls = set()
 
@@ -857,6 +866,12 @@ class ScribbleHubChapter(Chapter):
         if not hasattr(self, "_soup"):
             self._soup = soupify_request(self.req)
         return self._soup
+
+    @property
+    def comments_soup(self):
+        if not hasattr(self, "_comments_soup"):
+            self._comments_soup = soupify_request(self.comments_req)
+        return self._comments_soup
 
     def get_extra_urls(self):
         # make sure we've processed everything
@@ -918,19 +933,8 @@ class ScribbleHubChapter(Chapter):
             ]
 
             # TODO: actually handle pagination and replies?
-            comment_page = soupify_request(
-                futures.post(
-                    "https://www.scribblehub.com/wp-admin/admin-ajax.php",
-                    data=dict(
-                        action="wi_getcomment_pagination_chapters",
-                        pagenum=1,
-                        comments_perpage=100,
-                        mypostid=self.chapter_id,
-                    ),
-                )
-            )
             comments = []
-            for c in comment_page.select(".comment-body"):
+            for c in self.comments_soup.select(".comment-body"):
                 comments.append(
                     "<h3><b>{}</b> ({})</h3>{}".format(
                         c.select_one(".comment-author span.fn").text.strip(),
