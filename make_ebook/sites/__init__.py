@@ -2,6 +2,7 @@ from .registry import get_site
 
 from . import ao3
 from . import fictionmania
+from . import hentai_foundry
 from . import literotica
 from . import mcstories
 from . import scribblehub

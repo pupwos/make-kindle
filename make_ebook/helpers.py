@@ -11,8 +11,9 @@ from requests_futures.sessions import FuturesSession
 import unicodedata
 
 
+session = requests.Session()
 cached = CacheControl(
-    requests.Session(), heuristic=ExpiresAfter(hours=1), cache=FileCache(".webcache")
+    session, heuristic=ExpiresAfter(hours=1), cache=FileCache(".webcache")
 )
 futures = FuturesSession(session=cached, max_workers=5)
 
