@@ -9,7 +9,7 @@ from .registry import register
 
 @register("hentai-foundry.com")
 class HFStory(Story):
-    publisher = "scribblehub.com"
+    publisher = "hentai-foundry.com"
     author = chapters = title = None
 
     def __init__(self, url):
