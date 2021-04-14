@@ -13,14 +13,15 @@ fm_urls = {
 }
 fm_js_start = "javascript:newPopwin('"
 
-_FMChapter = namedtuple("_FMChapter", "id title toc_extra text notes_pre notes_post")
 
+class FMChapter(Chapter):
+    # could probably use dataclasses, if we want a py3.7 dep
+    title = text = None
 
-class FMChapter(Chapter, _FMChapter):
-    def __new__(cls, *args, **kwargs):
-        self = _FMChapter.__new__(cls, *args, **kwargs)
-        Chapter.__init__(self)
-        return self
+    def __init__(self, **kwargs):
+        super(FMChapter, self).__init__()
+        for k, v in kwargs.items():
+            setattr(self, k, v)
 
 
 @register(domain="fictionmania.tv")
@@ -101,13 +102,4 @@ class FMStory(Story):
 
         text = gather_bits(bits)
 
-        self.chapters = [
-            FMChapter(
-                id=1,
-                title=self.title,
-                toc_extra="",
-                text=text,
-                notes_pre=[],
-                notes_post=[],
-            )
-        ]
+        self.chapters = [FMChapter(title=self.title, text=text)]

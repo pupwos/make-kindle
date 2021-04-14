@@ -26,7 +26,7 @@ def register(domain=None, prefix=None):
 def get_site(path):
     for pref, cls in _prefix_registry.items():
         if path.startswith(pref):
-            return cls(path)
+            return cls
 
     netloc = urlparse(path).netloc
     while "." in netloc and netloc not in _domain_registry:
