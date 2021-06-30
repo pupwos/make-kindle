@@ -1,5 +1,6 @@
 import re
 from urllib.parse import urljoin, urlparse
+import warnings
 
 from bs4 import Tag
 
@@ -106,7 +107,9 @@ class ScribbleHubStory(Story):
 
     @property
     def extra(self):
-        extra_urls = set().union(*(chap.get_extra_urls() for chap in self.chapters))
+        extra_urls = set()
+        for chap in self.chapters:
+            extra_urls.update(chap.get_extra_urls())
         return [self.cover_img] + [get_sh_extra(url) for url in extra_urls]
 
 
@@ -160,14 +163,10 @@ class ScribbleHubChapter(Chapter):
             if x.attrs["src"].startswith("extra-"):
                 continue
 
-            if "mceSmilieSprite" in x.get("class", []):
-                url = get_sh_emoji_url(
-                    next(
-                        c
-                        for c in x["class"]
-                        if c.startswith("mceSmilie") and c != "mceSmilieSprite"
-                    )
-                )
+            matches = [c for c in x.get("class", []) if c.startswith("mceSmilieSprite")]
+            if len(matches) >= 2:
+                klass = next(c for c in matches if c != "mceSmilieSprite")
+                url = get_sh_emoji_url(klass)
             else:
                 url = x.attrs["src"]
             self.extra_urls.add(url)
